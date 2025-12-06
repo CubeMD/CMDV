@@ -1,0 +1,11 @@
+name = "PMS"
+uid = "PressureMakesDiamondsOrWhat-faf-2024-510"
+version = 510
+copyright = "EveryoneKeepingFAFAlive"
+description = "BoneShaker"
+author = "CubeMD"
+selectable = true
+enabled = true
+exclusive = false
+ui_only = false
+conflicts = { "eternal-pack-shared_mouse_2" }

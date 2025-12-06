@@ -1,0 +1,1 @@
+Wreckage.OnDamage = Prop.OnDamage
