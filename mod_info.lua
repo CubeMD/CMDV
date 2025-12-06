@@ -1,11 +1,11 @@
-name = "PMS"
-uid = "PressureMakesDiamondsOrWhat-faf-2024-510"
+name = "CMDV"
+uid = "PressureMakesDiamondsOrWhat-faf-2025-510"
 version = 510
-copyright = "EveryoneKeepingFAFAlive"
-description = "BoneShaker"
+copyright = "Forever"
+description = "Forged Alliance Forever Mod - Conservation of Momentum Dynamics Variation"
 author = "CubeMD"
 selectable = true
 enabled = true
-exclusive = false
+exclusive = true
 ui_only = false
 conflicts = { "eternal-pack-shared_mouse_2" }
