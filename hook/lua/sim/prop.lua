@@ -1,3 +1,5 @@
+--- START OF FILE prop.txt ---
+
 local OrigProp = Prop
 
 function GetVectorLength(v)
@@ -52,78 +54,80 @@ Prop = Class(OrigProp) {
                 self.SavedProj = projecto
                 self.SavedProj.SavedProp = self
 
-                -- local oldOnDestroy = self.SavedProj.OnDestroy
-                -- self.SavedProj.OnDestroy = function(self)
-                --     local p1 = prop
-                --     if (p1 ~= nil and IsDestroyed(p1) == false) then
-                --         p1:UpdateUILabel()
-                --     end
-
-                --     oldOnDestroy(self)
-                -- end
-
                 self.SavedProj.OnImpact = function(self, targetType, targetEntity)
                     local a = prop
                     local b = projecto
-                    -- local vc = b:GetPosition()
-                    -- local vx, vy, vz = b:GetVelocity()
-
-                    -- local nv = NormalizeVector(Vector(vx, 0, vz))
-                    
-                    -- local mult = GetVectorLength(Vector(nv[1], vy, nv[3])) * (a.MaxMassReclaim * a.ReclaimLeft + 0.1)
-
-                    -- local damageData = {}
-                    -- damageData.DamageRadius = math.min(math.max(mult * 0.1, 0), 2)
-                    -- damageData.DamageAmount = mult
-                    -- damageData.DamageType = 'TreeForce'
-                    -- damageData.DamageFriendly = false
-                    -- damageData.CollideFriendly = false
-                    
-                    -- b:SetVelocity(0, 0, 0)
-                    -- b:SetBallisticAcceleration(0)
                     local p = b:GetPosition()
+
+                    local merged = false
                     
-                    -- b:SetCollideSurface(false)
-
-                    -- if damageData.DamageAmount > 10 then
-                    --     DamageArea(
-                    --         instigator,
-                    --         vc,
-                    --         damageData.DamageRadius,
-                    --         damageData.DamageAmount,
-                    --         damageData.DamageType,
-                    --         damageData.DamageFriendly,
-                    --         false
-                    --     )
-                    -- end
-
                     if a ~= nil and IsDestroyed(a) == false then
+                        -- CLUMPING LOGIC: Search for nearby mass props to merge into
+                        local checkRect = Rect(p[1]-1, p[3]-1, p[1]+1, p[3]+1)
+                        local candidates = GetReclaimablesInRect(checkRect)
+                        
+                        if candidates then
+                            for _, r in candidates do
+                                -- Check if it's a valid prop, not us, not the projectile, and has mass
+                                if r and not IsDestroyed(r) and IsProp(r) and r ~= a and r ~= b and r.MaxMassReclaim then
+                                    local rPos = r:GetPosition()
+                                    local dist = VDist2(p[1], p[3], rPos[1], rPos[3])
+                                    
+                                    -- Distance threshold for merging (fluid drop coalescence)
+                                    if dist < 0.5 then
+                                        local aMass = (a.MaxMassReclaim or 0) * (a.ReclaimLeft or 1)
+                                        local aEnergy = (a.MaxEnergyReclaim or 0) * (a.ReclaimLeft or 1)
+                                        
+                                        local rMass = (r.MaxMassReclaim or 0) * (r.ReclaimLeft or 1)
+                                        local rEnergy = (r.MaxEnergyReclaim or 0) * (r.ReclaimLeft or 1)
+                                        
+                                        local newMass = rMass + aMass
+                                        local newEnergy = rEnergy + aEnergy
+                                        
+                                        -- Update target prop values
+                                        r.MaxMassReclaim = newMass
+                                        r.MaxEnergyReclaim = newEnergy
+                                        r.ReclaimLeft = 1 -- Reset health ratio since we updated max
+                                        
+                                        -- Update scale based on mass (Cube root approximation for volume -> radius)
+                                        -- Assuming standard mass is around 10-100, we apply a factor
+                                        local bpMass = r:GetBlueprint().Economy.ReclaimMassMax or r:GetBlueprint().Economy.BuildCostMass or 10
+                                        if bpMass < 1 then bpMass = 10 end
+                                        
+                                        -- Determine current scale relative to BP (if previously scaled)
+                                        -- Since we don't store previous scale easily, let's recalculate based on total mass vs BP mass
+                                        local newScale = math.pow(newMass / bpMass, 0.333) * (r:GetBlueprint().Display.UniformScale or 1)
+                                        
+                                        r:SetScale(newScale)
+                                        r:UpdateUILabel()
+                                        
+                                        -- Destroy the falling prop
+                                        a:Destroy()
+                                        merged = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    if not merged and a ~= nil and IsDestroyed(a) == false then
                         a:DetachFrom(true)
                         b:DetachFrom(true)
                         local z = Vector(p[1], GetTerrainHeight(p[1],p[3]), p[3])
                         Warp( a, z)
                         a:SetOrientation(o, true)
                         a.CachePosition = z
+                        a:UpdateUILabel()
                     end
 
-                    -- Warp( b, Vector(p[1], GetTerrainHeight(p[1],p[3]) + 0.2, p[3]))
-
                     b:OnImpactDestroy(targetType, targetEntity)
-
-                    a:UpdateUILabel()
                 end
 
                 self.SavedProj.DoDamage = function(self, instigator, DamageData, targetEntity, cachedPosition)
                 end
 
                 self.SavedProj.OnDamage = function(self, instigator, amount, vector, damageType)
-                    -- if self.Blueprint.Defense.MaxHealth then
-                    --     -- we have some health, try and survive
-                    --     self:DoTakeDamage(instigator, amount, vector, damageType)
-                    -- else
-                    --     -- we have no health, just perish
-                    --     self:OnKilled(instigator, damageType)
-                    -- end
                 end
 
                 self.SavedProj.OnTrackTargetGround = function(self)
@@ -155,15 +159,6 @@ Prop = Class(OrigProp) {
                 self.SavedProj.DoUnitImpactBuffs = function(self, target)
                 end
 
-                -- self.SavedProj.OnImpactDestroy = function(self, targetType, targetEntity)
-                --     -- if self.DestroyOnImpact or
-                --     --     (not targetEntity) or
-                --     --     (not EntityCategoryContains(OnImpactDestroyCategories, targetEntity))
-                --     -- then
-                --     --     self:Destroy()
-                --     -- end
-                -- end
-
                 self.SavedProj.AddFlare = function(self, tbl)
                 end
 
@@ -180,28 +175,6 @@ Prop = Class(OrigProp) {
                 end
 
                 self.SavedProj.DoTakeDamage = function(self, instigator, amount, vector, damageType)
-                    -- Check for valid projectile
-                    -- if not self or self:BeenDestroyed() then
-                    --     return
-                    -- end
-
-                    -- self:AdjustHealth(instigator, -amount)
-                    -- local health = self:GetHealth()
-                    -- if health <= 0 then
-                    --     if damageType == 'Reclaimed' then
-                    --         self:Destroy()
-                    --     else
-                    --         local excessDamageRatio = 0.0
-
-                    --         -- Calculate the excess damage amount
-                    --         local excess = health - amount
-                    --         local maxHealth = self.Blueprint.Defense.MaxHealth or 10
-                    --         if excess < 0 and maxHealth > 0 then
-                    --             excessDamageRatio = -excess / maxHealth
-                    --         end
-                    --         self:OnKilled(instigator, damageType, excessDamageRatio)
-                    --     end
-                    -- end
                 end
 
                 self.SavedProj:SetNewTargetGround({propPosition[1], propPosition[2] - 1000, propPosition[3]})

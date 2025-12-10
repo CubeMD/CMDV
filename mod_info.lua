@@ -1,6 +1,6 @@
 name = "CMDV"
 uid = "PressureMakesDiamondsOrWhat-faf-2025-510"
-version = 510
+version = 511
 copyright = "Forever"
 description = "Forged Alliance Forever Mod - Conservation of Momentum Dynamics Variation"
 author = "CubeMD"

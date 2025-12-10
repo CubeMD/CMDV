@@ -1,10 +1,22 @@
+--- START OF FILE gamemain.txt ---
+
 local originalCreateUI = CreateUI
 local originalSetLayout = SetLayout
+
+-- Deadlock Control State
+local DeadlockMode = true
+local DeadlockThread = nil
 
 function CreateUI(isReplay)
     originalCreateUI(isReplay)
     InitSharedMouse(isReplay)
+    
+    -- Initialize Deadlock Controls
+    if not isReplay then
+        DeadlockThread = ForkThread(DeadlockControlLoop)
+    end
 end
+
 playersUI = false
 function SetLayout(layout)
 	originalSetLayout(layout)
@@ -17,6 +29,8 @@ local modPath = {
 	cursors = '/mods/PMS/textures/cursors/'
 }
 local sharedWith = {}
+
+-- ... (Existing SharedMouse Code preserved below) ...
 
 local WorldLabel = Class(Group) {
     __init = function(self, parent)
@@ -301,4 +315,172 @@ function InitSharedMouse(isReplay)
 			end
 		end)
 	end
+end
+
+-----------------------------------------------------------------------
+-- DEADLOCK CONTROL LOOP
+-----------------------------------------------------------------------
+
+function DeadlockControlLoop()
+    local cam = GetCamera("WorldCamera")
+    local UIUtil = import('/lua/ui/uiutil.lua')
+    
+    -- Reset Camera Accel for instant response
+    cam:SetAccMode("None")
+    
+    -- Control Settings
+    local yaw = 0
+    local pitch = 0.5
+    local distance = 18 -- Distance behind commander
+    local sensitivity = 0.003
+    local moveStep = 50 -- Distance to project move order
+    
+    -- Key Codes (Standard US Layout)
+    local KEY_W = 87
+    local KEY_A = 65
+    local KEY_S = 83
+    local KEY_D = 68
+    local KEY_F1 = 112 -- Toggle Key
+    local KEY_LCLICK = 1
+    
+    -- Screen Center
+    local screenWidth = GetScreenWidth()
+    local screenHeight = GetScreenHeight()
+    local centerX = screenWidth / 2
+    local centerY = screenHeight / 2
+    
+    -- State
+    local acu = nil
+    
+    while true do
+        
+        -- 1. TOGGLE LOGIC
+        if IsKeyDown(KEY_F1) then
+            DeadlockMode = not DeadlockMode
+            -- Simple debounce
+            WaitSeconds(0.25)
+        end
+        
+        -- 2. ACU FINDING LOGIC
+        if not acu or acu:IsDead() then
+            local selection = GetSelectedUnits()
+            if selection then
+                for _, u in selection do
+                    if u:GetBlueprint().CategoriesHash.COMMAND then
+                        acu = u
+                        break
+                    end
+                end
+            end
+            
+            -- Fallback: If not selected, try to find in focus army (requires iterating UI units, which is hard, relying on selection for now)
+            -- Or just check selection again next frame
+        end
+        
+        if DeadlockMode and acu and not acu:IsDead() then
+            
+            -- 3. MOUSE AIM (YAW/PITCH)
+            local mousePos = GetMousePosition()
+            local dx = mousePos[1] - centerX
+            local dy = mousePos[2] - centerY
+            
+            if dx ~= 0 or dy ~= 0 then
+                yaw = yaw + dx * sensitivity
+                pitch = pitch + dy * sensitivity
+                
+                -- Clamp pitch to avoid flipping over
+                if pitch < 0.2 then pitch = 0.2 end
+                if pitch > 1.3 then pitch = 1.3 end
+                
+                -- Lock mouse to center
+                WarpMouse(centerX, centerY)
+            end
+            
+            -- 4. CAMERA UPDATE
+            local pos = acu:GetPosition()
+            
+            -- Calculate Camera Offset based on Yaw/Pitch
+            -- SupCom World: Y is Up.
+            local sinYaw = math.sin(yaw)
+            local cosYaw = math.cos(yaw)
+            local sinPitch = math.sin(pitch)
+            local cosPitch = math.cos(pitch)
+            
+            -- Camera position: Behind unit based on yaw
+            local camX = pos[1] + (sinYaw * distance * cosPitch)
+            local camZ = pos[3] + (cosYaw * distance * cosPitch)
+            local camY = pos[2] + (distance * sinPitch) + 2 -- Lift camera slightly
+            
+            -- Look Target: Slightly above unit's head
+            local targetX = pos[1]
+            local targetY = pos[2] + 2
+            local targetZ = pos[3]
+            
+            -- Apply Camera
+            cam:SnapTo({targetX, targetY, targetZ}, {camX, camY, camZ}, 0)
+            
+            -- 5. MOVEMENT (WASD)
+            local moveX = 0
+            local moveZ = 0
+            
+            if IsKeyDown(KEY_W) then moveZ = -1 end
+            if IsKeyDown(KEY_S) then moveZ = 1 end
+            if IsKeyDown(KEY_A) then moveX = -1 end
+            if IsKeyDown(KEY_D) then moveX = 1 end
+            
+            if moveX ~= 0 or moveZ ~= 0 then
+                -- Translate WASD to World Space based on Camera Yaw
+                -- Forward Vector (Flattened) is opposite to Camera Offset Vector
+                local fwdX = -sinYaw
+                local fwdZ = -cosYaw
+                
+                -- Right Vector is perpendicular to Forward
+                local rightX = -fwdZ
+                local rightZ = fwdX
+                
+                -- Combine
+                local worldX = (fwdX * -moveZ) + (rightX * moveX)
+                local worldZ = (fwdZ * -moveZ) + (rightZ * moveX)
+                
+                -- Project Destination
+                local dest = {
+                    pos[1] + worldX * moveStep,
+                    pos[2],
+                    pos[3] + worldZ * moveStep
+                }
+                
+                -- Issue Move Command
+                -- Clear previous commands to ensure instant response
+                IssueClearCommands({acu})
+                IssueMove({acu}, dest)
+                
+            else
+                -- Stop if no keys pressed
+                -- Only clear if we were moving previously? 
+                -- For smoothness, clearing continuously ensures we don't drift.
+                -- However, clearing stops shooting.
+                -- We only clear if we are NOT shooting.
+                if not IsKeyDown(KEY_LCLICK) then
+                   -- IssueClearCommands({acu}) -- Optional: Stops unit instantly, but looks jerky
+                end
+            end
+            
+            -- 6. SHOOTING
+            if IsKeyDown(KEY_LCLICK) then
+                -- Get Aim Point (World Pos at Screen Center)
+                local aimPos = GetMouseWorldPos()
+                
+                -- Issue Attack
+                -- In SupCom, IssueAttack stops movement. 
+                -- To strafe (Move + Shoot), we rely on Move command + Auto-fire, 
+                -- OR we prioritize Attack.
+                -- Deadlock style: Attack takes priority for aiming.
+                
+                IssueAttack({acu}, aimPos)
+            end
+        end
+        
+        -- High refresh rate for smooth camera
+        WaitSeconds(0.01)
+    end
 end

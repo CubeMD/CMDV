@@ -1,5 +1,24 @@
 local OrigUnit = Unit
 
+-- Local helper functions for physics vector math
+local function GetVectorLength(v)
+    return math.sqrt(math.pow(v.x, 2) + math.pow(v.y, 2) + math.pow(v.z, 2))
+end
+
+local function NormalizeVector(v)
+    local length = GetVectorLength(v)
+    if length > 0 then
+        local invlength = 1 / length
+        return Vector(v.x * invlength, v.y * invlength, v.z * invlength)
+    else
+        return Vector(0,0,0)
+    end
+end
+
+local function GetDirectionVector(v1, v2)
+    return NormalizeVector(Vector(v1.x - v2.x, v1.y - v2.y, v1.z - v2.z))
+end
+
 Unit = Class(OrigUnit) {
 
     OnCreate = function(self)
@@ -276,85 +295,102 @@ Unit = Class(OrigUnit) {
         self:Destroy()
     end,
 
-    -- OnDamage = function(self, instigator, amount, vector, damageType)
+    OnDamage = function(self, instigator, amount, vector, damageType)
 
-    --     -- only applies to trees
-    --     if damageType == "TreeForce" or damageType == "TreeFire" then 
-    --         return 
-    --     end
+        -- ignore specific types
+        if damageType == "TreeForce" or damageType == "TreeFire" or damageType == "FAF_AntiShield" then 
+            return 
+        end
 
-    --     if self.CanTakeDamage then
-
-    --         if instigator ~= nil and (self.IsFlying == nil or self.IsFlying == false) then
-    --             -- Create a projectile and launch it
-    --             local o = self:GetOrientation()
-    --             local propPosition = self:GetPosition()       
-    --             local meteorProj = instigator:CreateProjectile('/projectiles/TDFGauss01/TDFGauss01_proj.bp', propPosition[1], propPosition[2], propPosition[3], nil, nil, nil):SetLifetime(30)
-    --             Warp( meteorProj, Vector(propPosition[1], propPosition[2], propPosition[3]))
-    --             meteorProj:SetVelocityAlign(false)
-    --             self:AttachTo(meteorProj, 0)
-
-    --             meteorProj.SavedProp = self
-    --             meteorProj.SavedProp:SetOrientation(o, true)
-    --             self.IsFlying = true
+        -- PHYSICS: "Creeper Fluid" behavior on damage
+        -- If unit takes significant damage, it gets knocked around like a prop
+        if self.CanTakeDamage and instigator and amount > 0 then
+            
+            -- Only trigger physics if we aren't already flying (prevent infinite recursion/stacking)
+            if self.FluidPhysicsProj == nil or IsDestroyed(self.FluidPhysicsProj) then
                 
-    --             --local instigatorPosition = instigator:GetPosition()
+                local unitPos = self:GetPosition()
+                local instPos = instigator:GetPosition()
 
-    --             -- meteorProj.AssociatedProp = prop
+                -- Flatten positions to ignore height differences for impulse direction
+                local flatUnit = {x=unitPos[1], y=unitPos[2], z=unitPos[3]}
+                local flatInst = {x=instPos[1], y=instPos[2], z=instPos[3]}
 
-    --             meteorProj:SetNewTargetGround({propPosition[1], propPosition[2] - 100, propPosition[3]})
+                -- Calculate direction: away from source
+                local dir = GetDirectionVector(flatUnit, flatInst)
+                
+                -- Calculate Impulse Force
+                -- Logarithmic scaling for damage amount, inversely proportional to unit Mass
+                -- Heavier units are harder to knock around
+                local massCost = self:GetTotalMassCost() or 100
+                local multM = math.log(amount, 2) + 1
+                local mult = multM / math.max((math.sqrt(massCost) * 0.1), 1)
 
-    --             -- local max = (1 - t) * 15
-    --             -- local min = math.max(max - 3, 0)
+                -- Create physics carrier projectile
+                local proj = self:CreateProjectile('/projectiles/TDFGauss01/TDFGauss01_proj.bp', 0, 0, 0, nil, nil, nil)
+                self.FluidPhysicsProj = proj -- Save reference to prevent double-launch
+                
+                -- Configure Projectile
+                proj:SetLifetime(10) -- Failsafe
+                proj:SetVelocity(dir.x * mult * 2.5, multM * 2, dir.z * mult * 2.5) -- Add Y-lift
+                proj:SetVelocityAlign(false)
+                
+                -- Attach Unit
+                self:SetImmobile(true) -- Stop navigation while airborne
+                self:AttachTo(proj, -1)
+                
+                -- Handle Impact/Landing
+                local originalOrientation = self:GetOrientation()
+                
+                proj.OnImpact = function(p, targetType, targetEntity)
+                    if not self:IsDead() then
+                        self:DetachFrom()
+                        -- Ensure unit lands on the ground properly
+                        local finalPos = p:GetPosition()
+                        local landHeight = GetTerrainHeight(finalPos[1], finalPos[3])
+                        Warp(self, Vector(finalPos[1], landHeight, finalPos[3]))
+                        
+                        self:SetImmobile(false) -- Regain control
+                        self:SetOrientation(originalOrientation, true)
+                    end
+                    p:Destroy()
+                end
+                
+                proj.OnDestroy = function(p)
+                    -- Failsafe if projectile dies without impact
+                    if not self:IsDead() and self:IsAttached() then
+                        self:DetachFrom()
+                        self:SetImmobile(false)
+                    end
+                end
+            end
+        end
 
-    --             local mult = amount / (self:GetTotalMassCost() * 2 + 30)
-
-    --             meteorProj:SetVelocity(vector[1] * mult, 0.2 + mult, vector[3] * mult)
-
-    --             -- meteorProj:PassDamageData(GetMeteorDamageTable())
-
-    --             --Warp( meteorProj, Vector(propPosition[1], propPosition[2], propPosition[3]))
-
-    --             local oldOnDestroy = meteorProj.OnDestroy
-    --             meteorProj.OnDestroy = function(self)
-                    
-    --                 --local prop = CreateProp(Vector(p[1], GetTerrainHeight(p[1],p[3]), p[3]), "/env/Geothermal/Props/Rocks/GeoRockGroup01_prop.bp")
-    --                 --prop:SetMaxReclaimValues(1, 12 + t * 500, 0)
-    --                 --prop:AddWorldImpulse(1000,1000,1000,1000,1000,1000)
-    --                 -- local motor = prop:FallDown()
-    --                 -- motor:Whack(100, 100, 100, 0, false)
-                    
-    --                 --Warp( prop, Vector(p[1] + Random(0,300), GetTerrainHeight(p[1],p[3]), p[3] + Random(0,300)))
-                    
-                    
-    --                 if meteorProj.SavedProp ~= nil and meteorProj.SavedProp:IsDead() == false then
-    --                     local p = meteorProj:GetPosition()
-    --                     meteorProj:DetachFrom(true)
-    --                     meteorProj.SavedProp:DetachFrom(true)
-
-    --                     Warp( meteorProj.SavedProp, Vector(p[1], GetTerrainHeight(p[1],p[3]), p[3]))
-    --                     meteorProj.SavedProp:SetOrientation(o, true)
-    --                     meteorProj.SavedProp.IsFlying = false
-    --                 end
-                   
-    --                 -- if GridReclaimInstance then
-    --                 --     GridReclaimInstance:OnReclaimUpdate(meteorProj.SavedProp)
-    --                 -- end
-    --                 -- Destroy the projectile
-    --                 oldOnDestroy(self)
-    --             end
-    --         end
-
-    --         -- Pass damage to an active personal shield, as personal shields no longer have collisions
-    --         local myShield = self.MyShield
-    --         if myShield.ShieldType == "Personal" and myShield:IsUp() then
-    --             self:DoOnDamagedCallbacks(instigator)
-    --             self.MyShield:ApplyDamage(instigator, amount, vector, damageType)
-    --         elseif damageType ~= "FAF_AntiShield" then
-    --             self:DoOnDamagedCallbacks(instigator)
-    --             self:DoTakeDamage(instigator, amount, vector, damageType)
-    --         end
-    --     end
-    -- end,
+        -- DAMAGE APPLICATION: Standard Logic + Shields
+        -- Pass damage to an active personal shield, as personal shields no longer have collisions
+        local myShield = self.MyShield
+        if myShield and myShield:IsUp() and damageType ~= 'FAF_AntiShield' then
+            -- Note: Personal shields usually skip ApplyDamage from collision check, so we do it here
+            myShield:ApplyDamage(instigator, amount, vector, damageType)
+        else
+            -- Apply direct damage
+            local preAdjHealth = self:GetHealth()
+            self:AdjustHealth(instigator, -amount)
+            
+            -- Check for death
+            if self:GetHealth() <= 0 then
+                if damageType == 'Reclaimed' then
+                    self:Destroy()
+                else
+                    local excessDamageRatio = 0.0
+                    local excess = preAdjHealth - amount
+                    local maxHealth = self:GetMaxHealth()
+                    if excess < 0 and maxHealth > 0 then
+                        excessDamageRatio = -excess / maxHealth
+                    end
+                    self:Kill(instigator, damageType, excessDamageRatio)
+                end
+            end
+        end
+    end,
 }
-
