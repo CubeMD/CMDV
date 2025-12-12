@@ -1,6 +1,0 @@
-TechToLOD = {
-    TECH1 = 99999,
-    TECH2 = 99999,
-    TECH3 = 99999,
-    EXPERIMENTAL = 99999,
-}
